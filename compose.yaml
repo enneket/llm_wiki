@@ -27,6 +27,14 @@ services:
       LLM_WIKI_ALLOW_UNAUTHENTICATED: "${LLM_WIKI_ALLOW_UNAUTHENTICATED:-true}"
       LLM_WIKI_ALLOW_LAN: "${LLM_WIKI_ALLOW_LAN:-true}"
       LLM_WIKI_LOG: "info"
+      # Address used by the container to reach services running on the host
+      # (Ollama, AnyTXT, MinerU, etc.). Override per service if your
+      # endpoint differs.
+      LLM_WIKI_LOCAL_OLLAMA_URL: "${LLM_WIKI_LOCAL_OLLAMA_URL:-http://host.docker.internal:11434}"
+      LLM_WIKI_LOCAL_ANYTXT_URL: "${LLM_WIKI_LOCAL_ANYTXT_URL:-http://host.docker.internal:9920}"
+      LLM_WIKI_LOCAL_MINERU_URL: "${LLM_WIKI_LOCAL_MINERU_URL:-http://host.docker.internal:8000}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/api/v1/health"]
       interval: 30s

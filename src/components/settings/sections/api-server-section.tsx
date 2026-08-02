@@ -18,6 +18,8 @@ import { API_SERVER_BASE_URL, API_SERVER_HEALTH_URL } from "@/lib/api-server-con
 import { generateApiToken } from "@/lib/api-token"
 import { useWikiStore } from "@/stores/wiki-store"
 import type { SettingsDraft, DraftSetter } from "../settings-types"
+import { IS_TAURI } from "@/lib/platform"
+import { getAuthToken, setAuthToken } from "@/lib/web-client"
 
 interface Props {
   draft: SettingsDraft
@@ -327,6 +329,16 @@ export function ApiServerSection({ draft, setDraft }: Props) {
           </div>
         </div>
 
+        {!IS_TAURI && health?.authRequired && (
+          <WebTokenEntry
+            t={t}
+            initialToken={getAuthToken()}
+            onSaved={() => {
+              window.location.reload()
+            }}
+          />
+        )}
+
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={handleOpenHealth} className="gap-1.5">
             <ExternalLink className="h-3.5 w-3.5" />
@@ -602,6 +614,73 @@ export function ApiServerSection({ draft, setDraft }: Props) {
               : sampleMcpConfig}
           </pre>
         </div>
+      </div>
+    </div>
+  )
+}
+
+function WebTokenEntry({
+  t,
+  initialToken,
+  onSaved,
+}: {
+  t: ReturnType<typeof useTranslation>["t"]
+  initialToken: string | null
+  onSaved: () => void
+}) {
+  const [token, setToken] = useState(initialToken ?? "")
+  const [reveal, setReveal] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const trimmed = token.trim()
+  return (
+    <div className="space-y-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs dark:border-amber-900/50 dark:bg-amber-950/40">
+      <div className="font-semibold text-amber-900 dark:text-amber-200">
+        {t("settings.sections.apiServer.webTokenTitle", {
+          defaultValue: "Server requires a token — paste it to enable requests",
+        })}
+      </div>
+      <p className="text-amber-900/90 dark:text-amber-200/80">
+        {t("settings.sections.apiServer.webTokenHelp", {
+          defaultValue:
+            "The headless server enforces the token configured at startup (LLM_WIKI_API_TOKEN). Paste it here so the browser sends it on every request. Stored only in localStorage.",
+        })}
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          type={reveal ? "text" : "password"}
+          value={token}
+          onChange={(event) => {
+            setToken(event.target.value)
+            setSaved(false)
+          }}
+          placeholder="LLM_WIKI_API_TOKEN"
+          className="max-w-md font-mono text-xs"
+        />
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => setReveal((value) => !value)}
+        >
+          {reveal ? t("settings.sections.apiServer.hide", { defaultValue: "Hide" }) : t("settings.sections.apiServer.show", { defaultValue: "Show" })}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          disabled={trimmed.length === 0}
+          onClick={() => {
+            setAuthToken(trimmed.length === 0 ? null : trimmed)
+            setSaved(true)
+            onSaved()
+          }}
+        >
+          {t("settings.sections.apiServer.saveToken", { defaultValue: "Save token" })}
+        </Button>
+        {saved && (
+          <span className="text-emerald-700 dark:text-emerald-400">
+            {t("settings.sections.apiServer.tokenSaved", { defaultValue: "Saved" })}
+          </span>
+        )}
       </div>
     </div>
   )

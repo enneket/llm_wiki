@@ -47,6 +47,7 @@ pub struct BackendHandle {
     shutdown: Arc<AtomicBool>,
     server_thread: Option<thread::JoinHandle<()>>,
     ctx: Arc<AppContext>,
+    _watcher: Option<crate::web::watcher::ProjectWatcher>,
 }
 
 impl Drop for BackendHandle {
@@ -212,7 +213,7 @@ impl Drop for RequestSlot {
 }
 
 pub fn run_server(config: BackendConfig) -> std::io::Result<BackendHandle> {
-    let ctx = AppContext::new(config)?;
+    let ctx = AppContext::new(config.clone())?;
     let bind_status = ctx.bind_status.clone();
     let shutdown = Arc::new(AtomicBool::new(false));
     let server_shutdown = shutdown.clone();
@@ -222,10 +223,21 @@ pub fn run_server(config: BackendConfig) -> std::io::Result<BackendHandle> {
         .spawn(move || {
             serve_until(ctx_for_thread, server_shutdown, bind_status);
         })?;
+    let watcher = match crate::web::watcher::ProjectWatcher::start(
+        ctx.tasks.clone(),
+        ctx.app_state.clone(),
+    ) {
+        Ok(watcher) => Some(watcher),
+        Err(err) => {
+            eprintln!("[web] WARN: file watcher failed to start: {err}");
+            None
+        }
+    };
     Ok(BackendHandle {
         shutdown,
         server_thread: Some(server_thread),
         ctx,
+        _watcher: watcher,
     })
 }
 
@@ -535,6 +547,7 @@ fn handle_request(
             handle_get_chat(ctx, project_id, session_id)
         }
         (&Method::Get, ["tasks"]) => handle_tasks(ctx, query),
+        (&Method::Get, ["events"]) => handle_events(ctx, query),
         (&Method::Get, ["tasks", task_id]) => handle_task(ctx, task_id),
         (&Method::Post, ["tasks", task_id, "cancel"]) => handle_task_cancel(ctx, task_id),
         (&Method::Post, ["tasks"]) => handle_task_enqueue(ctx, body_str),
@@ -726,8 +739,41 @@ fn handle_graph(ctx: &AppContext, project_id: &str, query: &str) -> ApiResponse 
         .clamp(1, 1000);
     match http::build_graph(ctx, &project, q, node_type, limit) {
         Ok(value) => http::ok_json(value),
-        Err(e) => http::err_json(500, e),
+        Err(err) => http::err_json(500, err),
     }
+}
+
+fn handle_events(ctx: &AppContext, query: &str) -> ApiResponse {
+    let params = parse_query(query);
+    let since = params
+        .get("since")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0);
+    let wait_ms = params
+        .get("wait")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    let events = if wait_ms == 0 {
+        ctx.tasks.events_since(since)
+    } else {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(wait_ms.min(25_000));
+        let mut last = ctx.tasks.events_since(since);
+        while last.is_empty() {
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            last = ctx.tasks.events_since(since);
+        }
+        last
+    };
+    let max_at = events.iter().map(|event| event.at).max().unwrap_or(since);
+    http::ok_json(serde_json::json!({
+        "ok": true,
+        "events": events,
+        "maxAt": max_at,
+    }))
+}
 }
 
 fn handle_rescan(ctx: &AppContext, project_id: &str, body: &str) -> ApiResponse {

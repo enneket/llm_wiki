@@ -265,6 +265,16 @@ impl TaskRegistry {
         inner.events.clone()
     }
 
+    pub fn events_since(&self, last_at_ms: i64) -> Vec<TaskEvent> {
+        let inner = self.inner.lock().expect("task registry poisoned");
+        inner
+            .events
+            .iter()
+            .filter(|event| event.at > last_at_ms)
+            .cloned()
+            .collect()
+    }
+
     fn persist(&self) {
         let snapshot: Vec<Task> = {
             let inner = self.inner.lock().expect("task registry poisoned");
