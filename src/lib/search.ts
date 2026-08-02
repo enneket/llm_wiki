@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core"
 import { normalizePath } from "@/lib/path-utils"
 import { useWikiStore } from "@/stores/wiki-store"
+import { IS_TAURI } from "@/lib/platform"
+import { webRequest, WEB_ENDPOINTS, type WebSearchResponse, type WebSearchHit } from "@/lib/web-client"
 
 export interface ImageRef {
   url: string
@@ -65,8 +67,15 @@ export async function searchWiki(
 ): Promise<SearchResult[]> {
   if (!query.trim()) return []
   const pp = normalizePath(projectPath)
+  const project = useWikiStore.getState().project
+  if (!IS_TAURI && project) {
+    const response = await webRequest<WebSearchResponse>(WEB_ENDPOINTS.search(project.id), {
+      method: "POST",
+      body: { query, topK: 20, includeContent: false },
+    })
+    return response.results.map((hit: WebSearchHit) => adaptWebHit(hit, pp))
+  }
   const embCfg = useWikiStore.getState().embeddingConfig
-
   const response = await invoke<BackendSearchResponse>("search_project", {
     projectPath: pp,
     query,
@@ -75,9 +84,21 @@ export async function searchWiki(
     queryEmbedding: null,
     embeddingConfig: embCfg,
   })
-
   return response.results.map((result) => ({
     ...result,
     path: `${pp}/${normalizePath(result.path).replace(/^\/+/, "")}`,
   }))
+}
+
+function adaptWebHit(hit: WebSearchHit, projectPath: string): SearchResult {
+  const rel = normalizePath(hit.path).replace(/^\/+/, "")
+  return {
+    path: `${projectPath}/${rel}`,
+    title: hit.title,
+    snippet: hit.snippet,
+    titleMatch: hit.titleMatch,
+    score: hit.score,
+    vectorScore: hit.vectorScore,
+    images: hit.images.map((image) => ({ url: image.url, alt: image.alt })),
+  }
 }

@@ -1,7 +1,8 @@
 import { loadTheme } from "@/lib/project-store"
-import { getCurrentWindow, type Theme as NativeTheme } from "@tauri-apps/api/window"
+import { IS_TAURI } from "@/lib/platform"
 
 export type AppTheme = "light" | "dark" | "system"
+type NativeTheme = "light" | "dark"
 
 let activeTheme: AppTheme = "system"
 let mediaQuery: MediaQueryList | null = null
@@ -11,26 +12,24 @@ function systemPrefersDark(): boolean {
   return window.matchMedia("(prefers-color-scheme: dark)").matches
 }
 
-function isTauriRuntime(): boolean {
-  return "__TAURI_INTERNALS__" in window || "__TAURI__" in window
-}
-
 function syncNativeWindowTheme(resolved: NativeTheme): void {
-  if (!isTauriRuntime()) return
-  const win = getCurrentWindow()
-  const background = resolved === "dark" ? "#27282b" : "#ffffff"
-  void win.setTheme(resolved).catch((err) => {
-    console.warn("[theme] failed to sync native window theme:", err)
-  })
-  void win.setBackgroundColor(background).catch((err) => {
-    console.warn("[theme] failed to sync native window background:", err)
+  if (!IS_TAURI) return
+  void import("@tauri-apps/api/window").then((mod) => {
+    const win = mod.getCurrentWindow()
+    const background = resolved === "dark" ? "#27282b" : "#ffffff"
+    void win.setTheme(resolved).catch((err) => {
+      console.warn("[theme] failed to sync native window theme:", err)
+    })
+    void win.setBackgroundColor(background).catch((err) => {
+      console.warn("[theme] failed to sync native window background:", err)
+    })
   })
 }
 
 export function applyTheme(theme: AppTheme): void {
   activeTheme = theme
   const root = document.documentElement
-  const resolved = theme === "system"
+  const resolved: NativeTheme = theme === "system"
     ? systemPrefersDark()
       ? "dark"
       : "light"

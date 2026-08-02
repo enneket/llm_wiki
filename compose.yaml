@@ -1,0 +1,39 @@
+services:
+  llm-wiki:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: llm-wiki:local
+    container_name: llm-wiki
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - llm-wiki-data:/data
+    environment:
+      LLM_WIKI_BIND_HOST: "0.0.0.0"
+      LLM_WIKI_PORT: "8080"
+      # Default to a stable, well-known token so the first launch is usable
+      # without manual setup. Override LLM_WIKI_API_TOKEN in your .env (or
+      # shell) for anything beyond local testing. Leaving the env var empty
+      # falls back to the same value, so users who haven't set anything still
+      # get a working auth-bearer token instead of HTTP 401 on every request.
+      LLM_WIKI_API_TOKEN: "${LLM_WIKI_API_TOKEN:-dev-token-change-me}"
+      # Authentication: when a token is set, the server enforces it. When
+      # neither token nor explicit allow-unauthenticated is set, requests
+      # without a token are rejected with 401. Default here is permissive
+      # so the first launch works out of the box; tighten this for any
+      # non-loopback deployment.
+      LLM_WIKI_ALLOW_UNAUTHENTICATED: "${LLM_WIKI_ALLOW_UNAUTHENTICATED:-true}"
+      LLM_WIKI_ALLOW_LAN: "${LLM_WIKI_ALLOW_LAN:-true}"
+      LLM_WIKI_LOG: "info"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/api/v1/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  llm-wiki-data:
+    name: llm-wiki-data

@@ -9,7 +9,7 @@ import {
   ShieldAlert,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
-import { openUrl } from "@tauri-apps/plugin-opener"
+import { openExternalUrl } from "@/lib/opener"
 import { apiServerStatus, mcpServerEntryPath } from "@/commands/fs"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -175,7 +175,7 @@ export function ApiServerSection({ draft, setDraft }: Props) {
   }, [mcpEntryPath, sampleMcpConfig])
 
   const handleOpenHealth = useCallback(() => {
-    void openUrl(API_SERVER_HEALTH_URL).catch((err) => {
+    void openExternalUrl(API_SERVER_HEALTH_URL).catch((err) => {
       console.error("[api-settings] open health failed:", err)
     })
   }, [])

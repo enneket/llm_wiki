@@ -78,23 +78,35 @@ pub enum FileChangeStatus {
     Superseded,
 }
 
+impl FileChangeStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FileChangeStatus::Pending => "pending",
+            FileChangeStatus::Processing => "processing",
+            FileChangeStatus::Done => "done",
+            FileChangeStatus::Failed => "failed",
+            FileChangeStatus::Superseded => "superseded",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileChangeTask {
-    id: String,
-    project_id: String,
-    path: String,
-    kind: FileChangeKind,
-    status: FileChangeStatus,
-    hash_before: Option<String>,
-    hash_after: Option<String>,
-    size: Option<u64>,
-    mtime_ms: Option<i64>,
-    created_at: i64,
-    updated_at: i64,
-    retry_count: u32,
-    error: Option<String>,
-    needs_rerun: bool,
+    pub id: String,
+    pub project_id: String,
+    pub path: String,
+    pub kind: FileChangeKind,
+    pub status: FileChangeStatus,
+    pub hash_before: Option<String>,
+    pub hash_after: Option<String>,
+    pub size: Option<u64>,
+    pub mtime_ms: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub retry_count: u32,
+    pub error: Option<String>,
+    pub needs_rerun: bool,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -102,6 +114,12 @@ pub struct FileChangeTask {
 pub struct FileChangeQueue {
     version: u32,
     tasks: Vec<FileChangeTask>,
+}
+
+impl FileChangeQueue {
+    pub fn tasks(&self) -> &[FileChangeTask] {
+        &self.tasks
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]

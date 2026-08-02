@@ -1,20 +1,5 @@
-/**
- * Project identity: stable UUID per project + global registry mapping
- * `UUID → current filesystem path`.
- *
- * Why: absolute paths are unstable (users move / rename project folders).
- * Queue tasks reference projects by UUID and look up the current path
- * via the registry at run time, so a moved folder doesn't orphan tasks.
- *
- * Storage:
- * - Per-project identity: `{project}/.llm-wiki/project.json`
- *     `{ "id": "<uuid>", "createdAt": <ms> }`
- * - Global registry: Tauri plugin-store `app-state.json` key `projectRegistry`
- *     `{ [id]: { id, path, name, lastOpened } }`
- */
-
-import { load } from "@tauri-apps/plugin-store"
-import { readFile, writeFile } from "@/commands/fs"
+import { IS_TAURI } from "@/lib/platform"
+import { getKvStore } from "@/lib/kv-store"
 import { normalizePath } from "@/lib/path-utils"
 
 const STORE_NAME = "app-state.json"
@@ -27,50 +12,91 @@ export interface ProjectIdentity {
 
 export interface ProjectRegistryEntry {
   id: string
-  path: string       // latest known filesystem path (normalized forward slashes)
+  path: string
   name: string
   lastOpened: number
 }
 
 export type ProjectRegistry = Record<string, ProjectRegistryEntry>
 
-// ── Per-project identity (reads/creates `.llm-wiki/project.json`) ─────────
+function generateProjectId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID()
+  }
+  const rand = Math.random().toString(16).slice(2)
+  return `project-${Date.now().toString(16)}-${rand}`
+}
+
+async function readFileWeb(path: string): Promise<string | null> {
+  if (typeof window === "undefined") return null
+  const raw = window.localStorage.getItem(`llm-wiki-fs:${path}`)
+  return raw
+}
+
+async function writeFileWeb(path: string, contents: string): Promise<void> {
+  if (typeof window === "undefined") return
+  window.localStorage.setItem(`llm-wiki-fs:${path}`, contents)
+}
+
+async function readFileDesktop(path: string): Promise<string> {
+  const { readFile } = await import("@/commands/fs")
+  return readFile(path)
+}
+
+async function writeFileDesktop(path: string, contents: string): Promise<void> {
+  const { writeFile } = await import("@/commands/fs")
+  return writeFile(path, contents)
+}
+
+async function readFileAny(path: string): Promise<string | null> {
+  if (IS_TAURI) {
+    try {
+      return await readFileDesktop(path)
+    } catch {
+      return null
+    }
+  }
+  return readFileWeb(path)
+}
+
+async function writeFileAny(path: string, contents: string): Promise<void> {
+  if (IS_TAURI) {
+    return writeFileDesktop(path, contents)
+  }
+  return writeFileWeb(path, contents)
+}
 
 function identityPath(projectPath: string): string {
   return `${normalizePath(projectPath)}/.llm-wiki/project.json`
 }
 
-/**
- * Return the project's stable UUID. Generates + writes one on first call
- * for a project that doesn't have `.llm-wiki/project.json` yet.
- */
 export async function ensureProjectId(projectPath: string): Promise<string> {
   const path = identityPath(projectPath)
   try {
-    const raw = await readFile(path)
-    const parsed = JSON.parse(raw) as ProjectIdentity
-    if (parsed?.id && typeof parsed.id === "string") {
-      return parsed.id
+    const raw = await readFileAny(path)
+    if (raw) {
+      const parsed = JSON.parse(raw) as ProjectIdentity
+      if (parsed?.id && typeof parsed.id === "string") {
+        return parsed.id
+      }
     }
   } catch {
     // missing or corrupt — fall through to create
   }
   const identity: ProjectIdentity = {
-    id: crypto.randomUUID(),
+    id: generateProjectId(),
     createdAt: Date.now(),
   }
   try {
-    await writeFile(path, JSON.stringify(identity, null, 2))
+    await writeFileAny(path, JSON.stringify(identity, null, 2))
   } catch (err) {
     console.warn("[project-identity] failed to write identity file:", err)
   }
   return identity.id
 }
 
-// ── Global registry (Tauri plugin-store) ──────────────────────────────────
-
 async function getStore() {
-  return load(STORE_NAME, { autoSave: true, defaults: {} })
+  return getKvStore(STORE_NAME)
 }
 
 export async function loadRegistry(): Promise<ProjectRegistry> {
@@ -88,10 +114,6 @@ async function saveRegistry(registry: ProjectRegistry): Promise<void> {
   await store.set(REGISTRY_KEY, registry)
 }
 
-/**
- * Create or update the registry entry for this project. Call on open /
- * create / switch so the path always reflects the latest known location.
- */
 export async function upsertProjectInfo(
   id: string,
   path: string,
@@ -107,20 +129,11 @@ export async function upsertProjectInfo(
   await saveRegistry(registry)
 }
 
-/**
- * Look up the current filesystem path by UUID. Returns null if the
- * project isn't in the registry (e.g. was deleted or never opened).
- */
 export async function getProjectPathById(id: string): Promise<string | null> {
   const registry = await loadRegistry()
   return registry[id]?.path ?? null
 }
 
-/**
- * Reverse lookup: given a path, find the UUID of a known project at
- * that exact location. Used by the clip watcher to translate
- * clip-server-supplied paths back to stable project ids.
- */
 export async function getProjectIdByPath(path: string): Promise<string | null> {
   const normalized = normalizePath(path)
   const registry = await loadRegistry()

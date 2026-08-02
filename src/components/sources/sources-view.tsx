@@ -1,28 +1,29 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react"
-import { open } from "@tauri-apps/plugin-dialog"
 import { Plus, FileText, RefreshCw, BookOpen, Trash2, Folder, ChevronRight, ChevronDown, Link } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useWikiStore } from "@/stores/wiki-store"
-import { listDirectory, readFile } from "@/commands/fs"
+import { platformListDirectory, platformReadFile } from "@/lib/platform-fs"
 import type { FileNode } from "@/types/wiki"
 import { useTranslation } from "react-i18next"
 import { normalizePath } from "@/lib/path-utils"
 import { decideDeleteClick } from "@/lib/sources-tree-delete"
 import { rescanProjectFileSync } from "@/lib/project-file-sync"
 import { naturalCompare } from "@/lib/natural-sort"
+import { pickFiles, pickDirectory } from "@/lib/dialog"
+import { importWebSourceFiles } from "@/lib/source-lifecycle"
 import {
   deleteSourceFile,
   deleteSourceFolder,
   enqueueSourceIngest,
-  importSourceFiles,
-  importSourceFolder,
 } from "@/lib/source-lifecycle"
 import { filterRawSourceTree } from "@/lib/source-filter"
 import { refreshProjectFileTree } from "@/lib/project-file-tree-refresh"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { importSourceUrls, parseImportUrls, type UrlImportResult } from "@/lib/url-source-import"
+import { IS_TAURI } from "@/lib/platform"
+import { adapterUpload } from "@/lib/adapter"
 
 const SOURCE_TREE_INITIAL_ROWS = 160
 const SOURCE_TREE_LOAD_BATCH = 160
@@ -72,7 +73,9 @@ export function SourcesView() {
     if (!project) return
     const pp = normalizePath(project.path)
     try {
-      const tree = await listDirectory(`${pp}/raw/sources`, true)
+      const tree = await platformListDirectory(`${pp}/raw/sources`, {
+        includeHidden: true,
+      })
       setSources(filterRawSourceTree(tree))
       setRefreshError(null)
     } catch (err) {
@@ -103,48 +106,15 @@ export function SourcesView() {
   async function handleImport() {
     if (!project) return
 
-    const selected = await open({
+    const picked = await pickFiles({
       multiple: true,
       title: t("sources.importSourceFiles"),
-      filters: [
-        {
-          name: "Documents",
-          extensions: [
-            "md", "mdx", "txt", "org", "rtf", "pdf",
-            "html", "htm", "xml",
-            "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-            "odt", "ods", "odp", "epub", "mobi", "pages", "numbers", "key",
-          ],
-        },
-        {
-          name: "Data",
-          extensions: ["json", "jsonl", "csv", "tsv", "yaml", "yml", "ndjson"],
-        },
-        {
-          name: "Code",
-          extensions: [
-            "py", "js", "ts", "jsx", "tsx", "rs", "go", "java",
-            "c", "cpp", "h", "rb", "php", "swift", "sql", "sh",
-          ],
-        },
-        {
-          name: "Images",
-          extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "tiff", "avif", "heic"],
-        },
-        {
-          name: "Media",
-          extensions: ["mp4", "webm", "mov", "avi", "mkv", "mp3", "wav", "ogg", "flac", "m4a"],
-        },
-        { name: "All Files", extensions: ["*"] },
-      ],
     })
-
-    if (!selected || selected.length === 0) return
+    if (!picked || picked.length === 0) return
 
     setImporting(true)
-    const paths = Array.isArray(selected) ? selected : [selected]
     try {
-      await importSourceFiles(project, paths, llmConfig, sourceWatchConfig)
+      await importWebSourceFiles(project, picked, llmConfig, sourceWatchConfig)
       await loadSources()
     } finally {
       setImporting(false)
@@ -154,15 +124,37 @@ export function SourcesView() {
   async function handleImportFolder() {
     if (!project) return
 
-    const selected = await open({
-      directory: true,
-      title: t("sources.importSourceFolder"),
-    })
+    if (!IS_TAURI) {
+      // Web mode: the user picks a folder via a native <input
+      // webkitdirectory> element. We receive a flat FileList with
+      // webkitRelativePath on each entry; we POST the whole tree in
+      // one multipart upload to /api/uploads so the server can write
+      // it under raw/sources/<folder>. Avoids listDirectory /
+      // copyFile / createDirectory entirely.
+      const picked = await pickWebkitFolder()
+      if (!picked || picked.files.length === 0) return
+      const folderName = picked.folderName || "imported"
+      setImporting(true)
+      try {
+        await adapterUpload(project.id, {
+          files: picked.files,
+          subdir: folderName,
+        })
+        await loadSources()
+      } catch (err) {
+        console.error(`Failed to import folder:`, err)
+      } finally {
+        setImporting(false)
+      }
+      return
+    }
 
-    if (!selected || typeof selected !== "string") return
+    const selected = await pickDirectory({ title: t("sources.importSourceFolder") })
+    if (!selected) return
 
     setImporting(true)
     try {
+      const { importSourceFolder } = await import("@/lib/source-lifecycle")
       await importSourceFolder(project, selected, llmConfig, sourceWatchConfig)
       await loadSources()
     } catch (err) {
@@ -197,7 +189,7 @@ export function SourcesView() {
 
   async function handleOpenSource(node: FileNode) {
     try {
-      const content = await readFile(node.path)
+      const content = await platformReadFile(node.path)
       openFileInPreview(node.path, content)
     } catch (err) {
       console.error("Failed to read source:", err)
@@ -681,4 +673,58 @@ function DeleteButton({
       <Trash2 className="h-3.5 w-3.5" />
     </Button>
   )
+}
+
+/**
+ * Open a browser-native folder picker (`<input webkitdirectory>`) in
+ * web mode. Resolves with the flattened FileList plus the top-level
+ * folder name (the first segment of every `webkitRelativePath`),
+ * suitable for handing straight to `adapterUpload`. Resolves to `null`
+ * when the user cancels or the picker isn't supported — the caller
+ * should treat that as a no-op.
+ */
+function pickWebkitFolder(): Promise<{ files: File[]; folderName: string } | null> {
+  return new Promise((resolve) => {
+    if (typeof document === "undefined") {
+      resolve(null)
+      return
+    }
+    const input = document.createElement("input")
+    ;(input as HTMLInputElement & { webkitdirectory?: boolean }).webkitdirectory = true
+    input.style.position = "fixed"
+    input.style.left = "-9999px"
+    input.style.top = "0"
+    document.body.appendChild(input)
+    let settled = false
+    const cleanup = () => {
+      if (input.parentNode) input.parentNode.removeChild(input)
+    }
+    const finish = (result: { files: File[]; folderName: string } | null) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(result)
+    }
+    input.addEventListener("change", () => {
+      const files = input.files
+      if (!files || files.length === 0) {
+        finish(null)
+        return
+      }
+      const collected: File[] = []
+      let folderName = ""
+      for (let i = 0; i < files.length; i += 1) {
+        const f = files.item(i)
+        if (!f) continue
+        collected.push(f)
+        const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath
+        if (!folderName && rel) {
+          folderName = rel.split("/")[0] ?? ""
+        }
+      }
+      finish({ files: collected, folderName })
+    })
+    input.addEventListener("cancel", () => finish(null))
+    input.click()
+  })
 }

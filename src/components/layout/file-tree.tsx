@@ -5,7 +5,8 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { useWikiStore } from "@/stores/wiki-store"
 import type { FileNode } from "@/types/wiki"
 import { useTranslation } from "react-i18next"
-import { listDirectory, openProjectFolder } from "@/commands/fs"
+import { openProjectFolder } from "@/commands/fs"
+import { platformListDirectory } from "@/lib/platform-fs"
 import { replaceNodeChildren } from "./file-tree-utils"
 
 function TreeNode({
@@ -127,7 +128,7 @@ export function FileTree() {
     loadingPaths.current.add(node.path)
     const projectId = project.id
     try {
-      const children = await listDirectory(node.path, { maxDepth: 1 })
+      const children = await platformListDirectory(node.path, { maxDepth: 1 })
       if (useWikiStore.getState().project?.id !== projectId) return
       const currentTree = useWikiStore.getState().fileTree
       const result = replaceNodeChildren(currentTree, node.path, children)

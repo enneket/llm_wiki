@@ -131,6 +131,7 @@
     "errorNameRequired": "Name and path are required",
     "errorLanguageRequired": "Please pick an AI output language",
     "requiredHint": "Enter a name, pick a language, and choose a parent directory to create the project.",
+    "webStorageHint": "The new project will be created inside the server's data directory.",
     "requiredMarker": "*",
     "browse": "Select Parent Directory",
     "aiOutputLanguage": "AI Output Language",
@@ -318,7 +319,8 @@
       "reading_context": "Reading context",
       "writing": "Writing answer",
       "resultCount": "results: {{count}}"
-    }
+    },
+    "webModeAgentUnsupported": "Web mode currently does not support agent streaming replies. Please use the desktop app."
   },
   "search": {
     "title": "Search",
@@ -463,7 +465,8 @@
         "empty": "No skills found. Add SKILL.md files to a scanned folder, then rescan.",
         "noSearchResults": "No skills match this search.",
         "enabled": "Enabled",
-        "disabled": "Disabled"
+        "disabled": "Disabled",
+        "desktopOnly": "Skill scanning is available only in the desktop app."
       },
       "llm": {
         "title": "LLM Models",
@@ -535,6 +538,7 @@
         "claudeSubscription": "subscription",
         "codexLogin": "Codex login",
         "cliAuthBefore": "If chat fails with an authentication error, run",
+        "cliDesktopOnly": "Available only in the desktop app.",
         "cliAuthAfter": "in a terminal to refresh the login.",
         "cliUnavailable": "{{name}} CLI not available.",
         "cliInstallBefore": "Install with",
@@ -837,7 +841,8 @@
           "import": "Import project",
           "rebuilt": "Rebuilt index with {{pages}} pages in {{groups}} groups.",
           "exported": "Project exported to {{path}}",
-          "imported": "Imported {{name}}. Switch projects to open it."
+          "imported": "Imported {{name}}. Switch projects to open it.",
+          "rebuildUnsupportedInWeb": "Rebuilding the wiki index is not supported in the headless web server. Run this action from the desktop app."
         },
         "dedup": {
           "title": "Detect duplicate entities / concepts",

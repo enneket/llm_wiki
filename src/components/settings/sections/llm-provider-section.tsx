@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { ChevronDown, ChevronRight, AlertCircle, CheckCircle2, Loader2, XCircle, Plus, Trash2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
-import { invoke } from "@tauri-apps/api/core"
+import { IS_TAURI } from "@/lib/platform"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
@@ -1049,8 +1049,17 @@ function ClaudeCliStatusPill() {
   const [result, setResult] = useState<DetectResult | null>(null)
 
   async function detect() {
+    // CLI detection invokes a Tauri-side command that requires the
+    // desktop binary search. The web build has neither, so render an
+    // explicit "desktop only" pill instead of pretending to probe.
+    if (!IS_TAURI) {
+      setResult({ installed: false, version: null, path: null, error: null })
+      setState("err")
+      return
+    }
     setState("loading")
     try {
+      const { invoke } = await import("@tauri-apps/api/core")
       const r = await invoke<DetectResult>("claude_cli_detect")
       setResult(r)
       setState(r.installed ? "ok" : "err")
@@ -1068,6 +1077,22 @@ function ClaudeCliStatusPill() {
   useEffect(() => {
     void detect()
   }, [])
+
+  if (!IS_TAURI) {
+    return (
+      <div className="space-y-1.5">
+        <Label className="m-0">{t("settings.sections.llm.cliStatus")}</Label>
+        <div className="flex items-start gap-1.5 rounded-md border border-border bg-background/50 px-2 py-1.5 text-xs text-muted-foreground">
+          <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <div>
+            {t("settings.sections.llm.cliDesktopOnly", {
+              defaultValue: "Available only in the desktop app.",
+            })}
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-1.5">
@@ -1144,8 +1169,16 @@ function CodexCliStatusPill() {
   const [result, setResult] = useState<DetectResult | null>(null)
 
   async function detect() {
+    // Mirror Claude: the detect command shells out locally and only
+    // exists in the desktop build.
+    if (!IS_TAURI) {
+      setResult({ installed: false, version: null, path: null, error: null })
+      setState("err")
+      return
+    }
     setState("loading")
     try {
+      const { invoke } = await import("@tauri-apps/api/core")
       const r = await invoke<DetectResult>("codex_cli_detect")
       setResult(r)
       setState(r.installed ? "ok" : "err")
@@ -1163,6 +1196,22 @@ function CodexCliStatusPill() {
   useEffect(() => {
     void detect()
   }, [])
+
+  if (!IS_TAURI) {
+    return (
+      <div className="space-y-1.5">
+        <Label className="m-0">{t("settings.sections.llm.cliStatus")}</Label>
+        <div className="flex items-start gap-1.5 rounded-md border border-border bg-background/50 px-2 py-1.5 text-xs text-muted-foreground">
+          <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <div>
+            {t("settings.sections.llm.cliDesktopOnly", {
+              defaultValue: "Available only in the desktop app.",
+            })}
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-1.5">

@@ -5,7 +5,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
 import { useWikiStore } from "@/stores/wiki-store"
-import { readFile, listDirectory } from "@/commands/fs"
+import { platformListDirectory, platformReadFile } from "@/lib/platform-fs"
 import type { FileNode } from "@/types/wiki"
 import { normalizePath } from "@/lib/path-utils"
 import { refreshProjectFileTree } from "@/lib/project-file-tree-refresh"
@@ -57,7 +57,7 @@ export function KnowledgeTree() {
     if (!project) return
     const pp = normalizePath(project.path)
     try {
-      const wikiTree = await listDirectory(`${pp}/wiki`)
+      const wikiTree = await platformListDirectory(`${pp}/wiki`, { root: "wiki" })
       const mdFiles = flattenMdFiles(wikiTree)
 
       const pageInfos: WikiPageInfo[] = []
@@ -65,7 +65,7 @@ export function KnowledgeTree() {
         // Skip index.md and log.md
         if (file.name === "index.md" || file.name === "log.md") continue
         try {
-          const content = await readFile(file.path)
+          const content = await platformReadFile(file.path)
           const info = parsePageInfo(file.path, file.name, content)
           pageInfos.push(info)
         } catch {
@@ -260,7 +260,10 @@ function RawSourcesSection() {
   useEffect(() => {
     if (!project) return
     const pp = normalizePath(project.path)
-    listDirectory(`${pp}/raw/sources`, true).then(filterRawSourceTree)
+    platformListDirectory(`${pp}/raw/sources`, {
+      includeHidden: true,
+      root: "sources",
+    }).then(filterRawSourceTree)
       .then((tree) => setSources(flattenAllFiles(tree)))
       .catch(() => setSources([]))
   }, [project])

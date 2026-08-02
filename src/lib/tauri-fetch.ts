@@ -40,7 +40,7 @@ const isNodeEnv = typeof window === "undefined"
  */
 export function getHttpFetch(): Promise<typeof globalThis.fetch> {
   if (!pluginFetchPromise) {
-    if (isNodeEnv) {
+    if (isNodeEnv || !isTauriRuntime()) {
       // Bind so `this === globalThis` — Node's fetch requires it.
       pluginFetchPromise = Promise.resolve(globalThis.fetch.bind(globalThis))
     } else {
@@ -50,6 +50,12 @@ export function getHttpFetch(): Promise<typeof globalThis.fetch> {
     }
   }
   return pluginFetchPromise
+}
+
+function isTauriRuntime(): boolean {
+  if (typeof window === "undefined") return false
+  const w = window as unknown as { __TAURI_INTERNALS__?: unknown; __TAURI__?: unknown }
+  return Boolean(w.__TAURI_INTERNALS__ || w.__TAURI__)
 }
 
 /**

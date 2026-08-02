@@ -1,7 +1,6 @@
 import { useRef, useEffect, useCallback, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { convertFileSrc, invoke } from "@tauri-apps/api/core"
-import { listen } from "@tauri-apps/api/event"
+import { IS_TAURI } from "@/lib/platform"
 import { BookOpen, Plus, Trash2, MessageSquare, X, Maximize2, FolderOpen, FileText } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ChatMessage, StreamingMessage, useSourceFiles, type ChatReferencePreview } from "./chat-message"
@@ -24,6 +23,70 @@ import { parseFrontmatter } from "@/lib/frontmatter"
 import { getFileCategory, getFileExtension, isTextReadable } from "@/lib/file-types"
 import { refreshProjectFileTree } from "@/lib/project-file-tree-refresh"
 import { summarizeAgentFileChange } from "@/lib/agent-file-activity"
+
+// Tauri-only imports are deferred behind the IS_TAURI guard below so the
+// browser build does not pull the Tauri runtime into its bundle. The web
+// branch never invokes any of these (agent streaming + tauri listen are
+// desktop-only) — they live as dynamic loaders triggered only inside
+// IS_TAURI branches.
+type TauriListen = <T>(event: string, handler: (event: { payload: T }) => void) => Promise<() => void>
+
+let tauriInvokeRef: typeof import("@tauri-apps/api/core").invoke | null = null
+let tauriInvokeLoading: Promise<typeof import("@tauri-apps/api/core").invoke> | null = null
+async function loadTauriInvoke(): Promise<typeof import("@tauri-apps/api/core").invoke> {
+  if (!IS_TAURI) throw new Error("Tauri invoke is unavailable in web mode")
+  if (tauriInvokeRef) return tauriInvokeRef
+  if (!tauriInvokeLoading) {
+    tauriInvokeLoading = import("@tauri-apps/api/core").then((mod) => {
+      tauriInvokeRef = mod.invoke
+      return mod.invoke
+    })
+  }
+  return tauriInvokeLoading
+}
+
+let tauriListenRef: TauriListen | null = null
+let tauriListenLoading: Promise<TauriListen> | null = null
+async function loadTauriListen(): Promise<TauriListen> {
+  if (!IS_TAURI) throw new Error("Tauri listen is unavailable in web mode")
+  if (tauriListenRef) return tauriListenRef
+  if (!tauriListenLoading) {
+    tauriListenLoading = import("@tauri-apps/api/event").then((mod) => {
+      tauriListenRef = mod.listen as TauriListen
+      return tauriListenRef
+    })
+  }
+  return tauriListenLoading
+}
+
+let tauriConvertFileSrcRef: typeof import("@tauri-apps/api/core").convertFileSrc | null = null
+let tauriConvertFileSrcLoading: Promise<typeof import("@tauri-apps/api/core").convertFileSrc> | null = null
+async function loadTauriConvertFileSrc(): Promise<typeof import("@tauri-apps/api/core").convertFileSrc> {
+  if (tauriConvertFileSrcRef) return tauriConvertFileSrcRef
+  if (!tauriConvertFileSrcLoading) {
+    tauriConvertFileSrcLoading = import("@tauri-apps/api/core").then((mod) => {
+      tauriConvertFileSrcRef = mod.convertFileSrc
+      return mod.convertFileSrc
+    })
+  }
+  return tauriConvertFileSrcLoading
+}
+
+/**
+ * Tauri-aware URL rewriter for previewed images. Mirrors the
+ * `convertFileSrc` shape from `@tauri-apps/api/core` so call sites stay
+ * readable; web mode returns an empty string so the preview column
+ * doesn't try to load a meaningless `asset://` URL.
+ */
+function convertFileSrc(path: string): string {
+  if (!IS_TAURI) return ""
+  // Synchronous fallback: we don't await the module here because some
+  // call sites still expect a string (e.g. <img src=...>). The first
+  // call kicks off the dynamic import; subsequent calls see the cache.
+  void loadTauriConvertFileSrc()
+  if (tauriConvertFileSrcRef) return tauriConvertFileSrcRef(path)
+  return ""
+}
 
 type InternalChatSendOptions = ChatSendOptions & {
   suppressUserMessage?: boolean
@@ -664,11 +727,18 @@ export function ChatPanel() {
 
   useEffect(() => {
     let cancelled = false
-    if (!project?.path) {
+    // Skill discovery depends on the Tauri-side `agent_list_skills`
+    // command, which lives only on the desktop runtime. In web mode the
+    // chat panel intentionally shows no skills (the agent itself is
+    // desktop-only too, see handleSend below).
+    if (!IS_TAURI || !project?.path) {
       setAvailableSkills([])
       return
     }
-    invoke<AvailableAgentSkill[]>("agent_list_skills", { projectPath: project.path })
+    loadTauriInvoke()
+      .then((invoke) =>
+        invoke<AvailableAgentSkill[]>("agent_list_skills", { projectPath: project.path }),
+      )
       .then((skills) => {
         if (cancelled) return
         const enabled = enabledSkillIds(skills, useChatStore.getState().disabledSkills)
@@ -732,12 +802,34 @@ export function ChatPanel() {
       const runId = ++runIdRef.current
       const backendRunId = `ui-${Date.now()}-${runId}`
 
+      // Web mode has no agent runtime — both the streaming agent and the
+      // legacy `agent_start_turn` invoke are Tauri-only. Recording the
+      // user message plus a single explanatory assistant reply keeps the
+      // conversation history readable and avoids leaving the chat in a
+      // hung "isStreaming" state when the user clicks Send.
+      if (!IS_TAURI) {
+        const noticeMessage = t("chat.webModeAgentUnsupported", {
+          defaultValue:
+            "Web mode currently does not support agent streaming replies. Please use the desktop app.",
+        })
+        finalizeStreamForConversation(convId, noticeMessage)
+        setAgentEvents([])
+        setStreamingConversationId(null)
+        abortRef.current = null
+        activeRunSessionIdRef.current = null
+        activeRunIdRef.current = null
+        return
+      }
+
       try {
         const controller = new AbortController()
         abortRef.current = controller
         activeRunSessionIdRef.current = convId
         activeRunIdRef.current = backendRunId
         const isCurrentRun = () => runIdRef.current === runId && !controller.signal.aborted
+
+        const invoke = await loadTauriInvoke()
+        const listen = await loadTauriListen()
 
         const useBackendAgent =
           llmConfig.provider !== "claude-code" &&
@@ -1218,12 +1310,16 @@ export function ChatPanel() {
     runIdRef.current += 1
     const sessionId = activeRunSessionIdRef.current
     const backendRunId = activeRunIdRef.current
-    if (sessionId) {
-      void invoke("agent_cancel_turn", {
-        projectId: project?.id ?? "current",
-        sessionId,
-        runId: backendRunId ?? undefined,
-      }).catch(() => {})
+    if (IS_TAURI && sessionId) {
+      void loadTauriInvoke()
+        .then((invoke) =>
+          invoke("agent_cancel_turn", {
+            projectId: project?.id ?? "current",
+            sessionId,
+            runId: backendRunId ?? undefined,
+          }),
+        )
+        .catch(() => {})
     }
     abortRef.current?.abort()
     abortRef.current = null

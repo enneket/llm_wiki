@@ -1,6 +1,5 @@
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
-import { open } from "@tauri-apps/plugin-dialog"
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog"
@@ -16,6 +15,8 @@ import { normalizePath } from "@/lib/path-utils"
 import { OUTPUT_LANGUAGE_OPTIONS } from "@/lib/output-language-options"
 import { useWikiStore, type OutputLanguage } from "@/stores/wiki-store"
 import { saveOutputLanguage } from "@/lib/project-store"
+import { pickDirectory } from "@/lib/dialog"
+import { IS_TAURI } from "@/lib/platform"
 
 interface CreateProjectDialogProps {
   open: boolean
@@ -36,8 +37,10 @@ export function getCreateProjectFormStatus(
   language: string,
   error: string,
   hasInteracted: boolean,
+  isWeb = false,
 ): CreateProjectFormStatus {
-  const missingRequired = !name.trim() || !path.trim() || !language
+  const pathMissing = isWeb ? false : !path.trim()
+  const missingRequired = !name.trim() || pathMissing || !language
   return {
     missingRequired,
     canCreate: !missingRequired,
@@ -61,7 +64,14 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
   const [hasInteracted, setHasInteracted] = useState(false)
   const [creating, setCreating] = useState(false)
   const setOutputLanguage = useWikiStore((s) => s.setOutputLanguage)
-  const formStatus = getCreateProjectFormStatus(name, path, language, error, hasInteracted)
+  const formStatus = getCreateProjectFormStatus(
+    name,
+    path,
+    language,
+    error,
+    hasInteracted,
+    !IS_TAURI,
+  )
 
   function markEdited() {
     setHasInteracted(true)
@@ -85,11 +95,8 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
   }
 
   async function handleBrowse() {
-    const selected = await open({
-      directory: true,
-      multiple: false,
-      title: t("project.browse"),
-    })
+    if (!IS_TAURI) return
+    const selected = await pickDirectory({ title: t("project.browse") })
     if (selected) {
       markEdited()
       setPath(selected)
@@ -97,9 +104,12 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
   }
 
   async function handleCreate() {
-    // Keep these guards even though the button is disabled in normal UI use:
-    // keyboard/event edge cases and future callers should still fail clearly.
-    if (!name.trim() || !path.trim()) {
+    if (!name.trim()) {
+      setError(t("project.errorNameRequired"))
+      setHasInteracted(true)
+      return
+    }
+    if (IS_TAURI && !path.trim()) {
       setError(t("project.errorNameRequired"))
       setHasInteracted(true)
       return
@@ -112,20 +122,19 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
     setCreating(true)
     setError("")
     try {
-      const project = await createProject(name.trim(), path.trim())
+      const parentPath = IS_TAURI ? path.trim() : ""
+      const project = await createProject(name.trim(), parentPath)
       const pp = normalizePath(project.path)
 
-      const template = getTemplate(selectedTemplate)
-      await writeFile(`${pp}/schema.md`, template.schema)
-      await writeFile(`${pp}/purpose.md`, template.purpose)
-      for (const dir of template.extraDirs) {
-        await createDirectory(`${pp}/${dir}`)
+      if (IS_TAURI) {
+        const template = getTemplate(selectedTemplate)
+        await writeFile(`${pp}/schema.md`, template.schema)
+        await writeFile(`${pp}/purpose.md`, template.purpose)
+        for (const dir of template.extraDirs) {
+          await createDirectory(`${pp}/${dir}`)
+        }
       }
 
-      // Persist the user's language choice. The store / disk
-      // mirror is what the rest of the app reads via
-      // `getOutputLanguage()` — without this write the choice
-      // wouldn't survive past the dialog closing.
       const lang = language as OutputLanguage
       setOutputLanguage(lang)
       await saveOutputLanguage(lang, project.id)
@@ -196,26 +205,32 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
               {t("project.aiOutputLanguageHint")}
             </p>
           </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="path">
-              {t("project.parentDir")} <span className="text-destructive">{t("project.requiredMarker")}</span>
-            </Label>
-            <div className="flex gap-2">
-              <Input
-                id="path"
-                value={path}
-                onChange={(e) => {
-                  markEdited()
-                  setPath(e.target.value)
-                }}
-                placeholder={t("project.parentDirPlaceholder")}
-                className="flex-1"
-              />
-              <Button variant="outline" size="icon" onClick={handleBrowse} type="button">
-                <FolderOpen className="h-4 w-4" />
-              </Button>
+          {IS_TAURI ? (
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="path">
+                {t("project.parentDir")} <span className="text-destructive">{t("project.requiredMarker")}</span>
+              </Label>
+              <div className="flex gap-2">
+                <Input
+                  id="path"
+                  value={path}
+                  onChange={(e) => {
+                    markEdited()
+                    setPath(e.target.value)
+                  }}
+                  placeholder={t("project.parentDirPlaceholder")}
+                  className="flex-1"
+                />
+                <Button variant="outline" size="icon" onClick={handleBrowse} type="button">
+                  <FolderOpen className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
-          </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              {t("project.webStorageHint")}
+            </p>
+          )}
           <div className="flex flex-col gap-2">
             <Label>{t("project.template")}</Label>
             <TemplatePicker selected={selectedTemplate} onSelect={setSelectedTemplate} />

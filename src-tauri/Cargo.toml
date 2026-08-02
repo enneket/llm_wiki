@@ -15,6 +15,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "llm-wiki"
 path = "src/main.rs"
 
+[[bin]]
+name = "llm-wiki-web"
+path = "src/bin/llm-wiki-web.rs"
+required-features = ["web"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -68,6 +73,26 @@ html2text = { version = "0.17.1", default-features = false, features = ["xml"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+
+[features]
+# `web` toggles which optional dependencies the headless binary pulls in.
+# Non-optional deps (walkdir, notify, md-5, etc.) are always built; this
+# feature exists to add `reqwest/multipart` and the `tokio/rt-multi-thread`
+# flag that the desktop UI doesn't need but the upload pipeline does.
+default = []
+web = [
+    "reqwest/multipart",
+    "reqwest/stream",
+    "tokio/rt-multi-thread",
+    "tokio/time",
+    "dep:signal-hook",
+]
+
+[target.'cfg(unix)'.dependencies]
+signal-hook = { version = "0.3", optional = true }
+
+[target.'cfg(not(unix))'.dependencies]
+signal-hook = { version = "0.3", optional = true }
 
 [profile.release]
 codegen-units = 1

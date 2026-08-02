@@ -9,6 +9,9 @@ mod server_bind;
 mod tray;
 mod types;
 
+#[cfg(feature = "web")]
+pub mod web;
+
 use panic_guard::run_guarded;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

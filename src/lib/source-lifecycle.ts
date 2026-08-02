@@ -656,3 +656,59 @@ function withRootContext(context: string, rootContext?: string): string {
   if (!context) return rootContext
   return `${rootContext} > ${context}`
 }
+
+import type { PickedFile } from "@/lib/dialog"
+import { IS_TAURI } from "@/lib/platform"
+import { adapterUpload } from "@/lib/adapter"
+import { webRequest, WEB_ENDPOINTS } from "@/lib/web-client"
+
+/**
+ * Browser-mode file import. The Tauri dialog returns absolute paths
+ * we can `copyFile()`, but the browser's File API hands us raw
+ * blobs we must hand to the headless server via `POST /uploads`.
+ */
+export async function importWebSourceFiles(
+  project: WikiProject,
+  picked: PickedFile[],
+  llmConfig: LlmConfig,
+  sourceWatchConfig?: SourceWatchConfig,
+): Promise<string[]> {
+  if (IS_TAURI) {
+    const paths = picked
+      .map((p) => p.name)
+      .filter((name): name is string => typeof name === "string" && name.length > 0)
+    if (paths.length === 0) return []
+    return importSourceFiles(project, paths, llmConfig, sourceWatchConfig)
+  }
+  const cfg = normalizeSourceWatchConfig(sourceWatchConfig)
+  const explicitImportConfig = { ...cfg, includeExtensions: [] }
+  const maxBytes = cfg.maxFileSizeMb * 1024 * 1024
+  const allowed = picked.filter((p) => {
+    if (isSensitiveConfigSourceFile(p.name)) return false
+    if (!isIngestableSourcePath(p.name)) return false
+    if (!isPathAllowedBySourceWatch(p.name, explicitImportConfig)) return false
+    if (p.size > maxBytes) return false
+    return true
+  })
+  if (allowed.length === 0) return []
+  const result = await adapterUpload(project.id, { files: allowed.map((p) => p.file) })
+  const saved = result.saved ?? []
+  const importedPaths = saved.map(
+    (entry) => `${normalizePath(project.path)}/${entry.path}`,
+  )
+  if (
+    importedPaths.length > 0 &&
+    hasUsableLlm(getTaskLlmConfig("ingest", llmConfig))
+  ) {
+    await webRequest(WEB_ENDPOINTS.tasks(), {
+      method: "POST",
+      body: {
+        projectId: project.id,
+        kind: "ingest",
+        target: "all",
+        payload: { sources: importedPaths },
+      },
+    }).catch(() => undefined)
+  }
+  return importedPaths
+}

@@ -17,8 +17,7 @@ import {
   FileText,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
-import { invoke } from "@tauri-apps/api/core"
-import { disable as disableAutostart, enable as enableAutostart } from "@tauri-apps/plugin-autostart"
+import { IS_TAURI } from "@/lib/platform"
 import i18n from "@/i18n"
 import { Button } from "@/components/ui/button"
 import { useWikiStore } from "@/stores/wiki-store"
@@ -472,10 +471,13 @@ export function SettingsView() {
       // picks them up — no app restart needed. tauri-plugin-http
       // builds a fresh reqwest client per fetch and reqwest reads
       // env vars at build time, so changing them here is enough.
-      try {
-        await invoke<string>("set_proxy_env", { config: newProxy })
-      } catch (err) {
-        console.warn("[proxy] live update failed; restart will still apply:", err)
+      if (IS_TAURI) {
+        try {
+          const { invoke } = await import("@tauri-apps/api/core")
+          await invoke<string>("set_proxy_env", { config: newProxy })
+        } catch (err) {
+          console.warn("[proxy] live update failed; restart will still apply:", err)
+        }
       }
 
       if (project) {
@@ -499,26 +501,39 @@ export function SettingsView() {
       // that window without any IPC round-trip. Bind-address changes still
       // require an app restart because the server sockets are already open.
       await saveApiConfig(newApiConfig)
-      try {
-        await invoke<string>("api_server_reload_config")
-      } catch (err) {
-        console.warn("[api] failed to reload API server config cache:", err)
+      // The Rust side reads `apiConfig.{enabled,token,mcpEnabled,allowLanAccess}` from this
+      // same `app-state.json` via a 5s cache, so saved changes propagate within
+      // that window without any IPC round-trip. Bind-address changes still
+      // require an app restart because the server sockets are already open.
+      if (IS_TAURI) {
+        try {
+          const { invoke } = await import("@tauri-apps/api/core")
+          await invoke<string>("api_server_reload_config")
+        } catch (err) {
+          console.warn("[api] failed to reload API server config cache:", err)
+        }
       }
 
       await saveGeneralConfig(newGeneralConfig)
-      try {
-        if (newGeneralConfig.autostart) {
-          await enableAutostart()
-        } else {
-          await disableAutostart()
+      if (IS_TAURI) {
+        try {
+          const { enable: enableAutostart, disable: disableAutostart } = await import(
+            "@tauri-apps/plugin-autostart"
+          )
+          if (newGeneralConfig.autostart) {
+            await enableAutostart()
+          } else {
+            await disableAutostart()
+          }
+        } catch (err) {
+          console.warn("[general] failed to update autostart:", err)
         }
-      } catch (err) {
-        console.warn("[general] failed to update autostart:", err)
-      }
-      try {
-        await invoke<string>("set_close_behavior", { value: newGeneralConfig.closeBehavior })
-      } catch (err) {
-        console.warn("[general] failed to update close behavior:", err)
+        try {
+          const { invoke } = await import("@tauri-apps/api/core")
+          await invoke<string>("set_close_behavior", { value: newGeneralConfig.closeBehavior })
+        } catch (err) {
+          console.warn("[general] failed to update close behavior:", err)
+        }
       }
 
       if (draft.uiLanguage !== i18n.language) {

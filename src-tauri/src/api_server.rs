@@ -348,7 +348,7 @@ fn body_limit_for_request(method: &Method, url: &str) -> usize {
     }
 }
 
-fn read_body(request: &mut tiny_http::Request, max_body_bytes: usize) -> Result<String, String> {
+pub(crate) fn read_body(request: &mut tiny_http::Request, max_body_bytes: usize) -> Result<String, String> {
     let mut limited = request.as_reader().take(max_body_bytes as u64 + 1);
     let mut bytes = Vec::new();
     limited
@@ -406,7 +406,7 @@ fn parse_query(query: &str) -> BTreeMap<String, String> {
     out
 }
 
-fn percent_decode(input: &str) -> String {
+pub(crate) fn percent_decode(input: &str) -> String {
     let bytes = input.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -565,7 +565,7 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     diff == 0
 }
 
-fn load_app_state(app: &AppHandle) -> Option<Value> {
+pub(crate) fn load_app_state(app: &AppHandle) -> Option<Value> {
     let now = Instant::now();
     let lock = APP_STATE_CACHE.get_or_init(|| Mutex::new(None));
     let mut previous = None;
@@ -594,11 +594,11 @@ fn load_app_state(app: &AppHandle) -> Option<Value> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ProjectEntry {
-    id: String,
-    name: String,
-    path: String,
-    current: bool,
+pub struct ProjectEntry {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub current: bool,
 }
 
 fn handle_projects(app: &AppHandle) -> ApiResponse {
@@ -705,7 +705,7 @@ fn resolve_project(app: &AppHandle, project_id: &str) -> Result<ProjectEntry, St
         .ok_or_else(|| format!("Unknown project: {project_id}"))
 }
 
-fn project_path_matches(stored_path: &str, candidate: &str) -> bool {
+pub(crate) fn project_path_matches(stored_path: &str, candidate: &str) -> bool {
     let stored = normalize_path(stored_path);
     let candidate = normalize_path(candidate);
     if cfg!(windows) {
@@ -715,7 +715,7 @@ fn project_path_matches(stored_path: &str, candidate: &str) -> bool {
     }
 }
 
-fn read_project_id(path: &str) -> Option<String> {
+pub(crate) fn read_project_id(path: &str) -> Option<String> {
     let raw = fs::read_to_string(Path::new(path).join(".llm-wiki/project.json")).ok()?;
     let parsed: Value = serde_json::from_str(&raw).ok()?;
     parsed
@@ -724,7 +724,7 @@ fn read_project_id(path: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn project_name_from_path(path: &str) -> String {
+pub(crate) fn project_name_from_path(path: &str) -> String {
     Path::new(path)
         .file_name()
         .and_then(|s| s.to_str())
@@ -732,7 +732,7 @@ fn project_name_from_path(path: &str) -> String {
         .to_string()
 }
 
-fn normalize_path(path: &str) -> String {
+pub(crate) fn normalize_path(path: &str) -> String {
     path.replace('\\', "/").trim_end_matches('/').to_string()
 }
 
@@ -1790,7 +1790,7 @@ fn handle_cancel_chat(app: &AppHandle, project_id: &str, session_id: &str) -> Ap
     }))
 }
 
-fn load_embedding_config(app: &AppHandle) -> Option<commands::search::SearchEmbeddingConfig> {
+pub(crate) fn load_embedding_config(app: &AppHandle) -> Option<commands::search::SearchEmbeddingConfig> {
     let parsed = load_app_state(app)?;
     let value = parsed.get("embeddingConfig")?.clone();
     serde_json::from_value::<commands::search::SearchEmbeddingConfig>(value).ok()
@@ -1909,6 +1909,115 @@ fn load_agent_runtime_config(app: &AppHandle, project_id: Option<&str>) -> Agent
             .cloned()
             .and_then(|value| serde_json::from_value(value).ok()),
     }
+}
+
+pub(crate) fn load_agent_llm_config(
+    app: &AppHandle,
+    project_id: &str,
+) -> Option<agent::provider::LlmConfig> {
+    let parsed = load_app_state(app)?;
+    project_llm_config(&parsed, project_id).or_else(|| {
+        parsed
+            .get("llmConfig")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok())
+    })
+}
+
+pub(crate) fn load_agent_web_search_config(
+    app: &AppHandle,
+) -> Option<agent::tools::WebSearchConfig> {
+    let parsed = load_app_state(app)?;
+    parsed
+        .get("searchApiConfig")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+}
+
+pub(crate) fn load_agent_anytxt_config(
+    app: &AppHandle,
+) -> Option<agent::tools::AnyTxtConfig> {
+    let parsed = load_app_state(app)?;
+    parsed
+        .get("searchApiConfig")
+        .and_then(|value| value.get("anyTxt"))
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+}
+
+pub(crate) struct AppStateSnapshot {
+    pub project_registry: BTreeMap<String, ProjectEntry>,
+    pub recent_projects: Vec<ProjectEntry>,
+}
+
+pub(crate) fn load_state_for(app: &AppHandle) -> Option<AppStateSnapshot> {
+    let value = load_app_state(app)?;
+    let registry = value
+        .get("projectRegistry")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let recent = value
+        .get("recentProjects")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut project_registry: BTreeMap<String, ProjectEntry> = BTreeMap::new();
+    for (id, value) in registry {
+        let path = value
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        if path.is_empty() {
+            continue;
+        }
+        let name = value
+            .get("name")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| project_name_from_path(&path));
+        project_registry.insert(
+            id.clone(),
+            ProjectEntry {
+                id,
+                name,
+                path: path.clone(),
+                current: false,
+            },
+        );
+    }
+    let mut recent_projects = Vec::new();
+    for value in recent {
+        let path = value
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        if path.is_empty() {
+            continue;
+        }
+        let id = value
+            .get("id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| path.clone());
+        let name = value
+            .get("name")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| project_name_from_path(&path));
+        recent_projects.push(ProjectEntry {
+            id,
+            name,
+            path,
+            current: false,
+        });
+    }
+    Some(AppStateSnapshot {
+        project_registry,
+        recent_projects,
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]

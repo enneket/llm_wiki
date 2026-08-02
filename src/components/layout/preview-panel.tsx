@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useRef } from "react"
 import { X } from "lucide-react"
 import { useWikiStore } from "@/stores/wiki-store"
-import { readFile, writeFile } from "@/commands/fs"
+import { platformReadFile, platformWriteFile } from "@/lib/platform-fs"
 import { getFileCategory, isBinary, isExtractedTextPreviewFile } from "@/lib/file-types"
 import { WikiEditor } from "@/components/editor/wiki-editor"
 import { FilePreview } from "@/components/editor/file-preview"
@@ -45,7 +45,7 @@ export function PreviewPanel() {
       return
     }
 
-    readFile(selectedFile)
+    platformReadFile(selectedFile)
       .then((content) => {
         lastLoadedRef.current = content
         setFileContent(content)
@@ -57,7 +57,7 @@ export function PreviewPanel() {
   }, [selectedFile, previewContentPath, externalPreview, setFileContent])
 
   const writeNow = useCallback((path: string, markdown: string, syncStore = false) => {
-    writeFile(path, markdown)
+    platformWriteFile(path, markdown)
       .then(() => {
         lastLoadedRef.current = markdown
         if (syncStore) setFileContent(markdown)

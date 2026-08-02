@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { invoke } from "@tauri-apps/api/core"
-import { open, save } from "@tauri-apps/plugin-dialog"
+import { IS_TAURI } from "@/lib/platform"
+import { pickFiles } from "@/lib/dialog"
+import { webRequest, WEB_ENDPOINTS } from "@/lib/web-client"
 import {
   Wrench,
   Loader2,
@@ -68,34 +70,79 @@ export function MaintenanceSection() {
     if (!project) return
     setProjectToolBusy(true)
     try {
-      const result = await invoke<{ pages: number; groups: number }>("rebuild_wiki_index", { projectPath: project.path })
-      await refreshProjectFileTree(project.path, { bumpDataVersion: true })
-      setProjectToolStatus(t("settings.sections.maintenance.projectData.rebuilt", { pages: result.pages, groups: result.groups }))
+      if (IS_TAURI) {
+        const result = await invoke<{ pages: number; groups: number }>("rebuild_wiki_index", { projectPath: project.path })
+        await refreshProjectFileTree(project.path, { bumpDataVersion: true })
+        setProjectToolStatus(t("settings.sections.maintenance.projectData.rebuilt", { pages: result.pages, groups: result.groups }))
+        return
+      }
+      setProjectToolStatus(t("settings.sections.maintenance.projectData.rebuildUnsupportedInWeb"))
     } catch (error) { setProjectToolStatus(String(error)) } finally { setProjectToolBusy(false) }
   }, [project, t])
 
   const handleExportProject = useCallback(async () => {
     if (!project) return
-    const destination = await save({ defaultPath: `${project.name}.llmwiki.zip`, filters: [{ name: "LLM Wiki project", extensions: ["zip"] }] })
-    if (!destination) return
     setProjectToolBusy(true)
     try {
-      await invoke("export_project_archive", { projectPath: project.path, destination })
-      setProjectToolStatus(t("settings.sections.maintenance.projectData.exported", { path: destination }))
+      if (IS_TAURI) {
+        const { save } = await import("@tauri-apps/plugin-dialog")
+        const destination = await save({ defaultPath: `${project.name}.llmwiki.zip`, filters: [{ name: "LLM Wiki project", extensions: ["zip"] }] })
+        if (!destination) return
+        await invoke("export_project_archive", { projectPath: project.path, destination })
+        setProjectToolStatus(t("settings.sections.maintenance.projectData.exported", { path: destination }))
+        return
+      }
+      const buffer = await webRequest<ArrayBuffer>(`${WEB_ENDPOINTS.fileContent(project.id)}?export=1`, {
+        rawResponse: true,
+      })
+      const blob = new Blob([buffer])
+      const url = URL.createObjectURL(blob as Blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `${project.name}.llmwiki.zip`
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      setProjectToolStatus(t("settings.sections.maintenance.projectData.exported", { path: a.download }))
     } catch (error) { setProjectToolStatus(String(error)) } finally { setProjectToolBusy(false) }
   }, [project, t])
 
   const handleImportProject = useCallback(async () => {
-    const archive = await open({ multiple: false, filters: [{ name: "LLM Wiki project", extensions: ["zip"] }] })
-    if (!archive || Array.isArray(archive)) return
-    const destination = await open({ directory: true, multiple: false, createDirectories: true })
-    if (!destination || Array.isArray(destination)) return
     setProjectToolBusy(true)
     try {
-      const path = await invoke<string>("import_project_archive", { archivePath: archive, destination })
-      const imported = await openProject(path)
-      await addToRecentProjects(imported)
-      setProjectToolStatus(t("settings.sections.maintenance.projectData.imported", { name: imported.name }))
+      if (IS_TAURI) {
+        const { open } = await import("@tauri-apps/plugin-dialog")
+        const archive = await open({ multiple: false, filters: [{ name: "LLM Wiki project", extensions: ["zip"] }] })
+        if (!archive || Array.isArray(archive)) return
+        const destination = await open({ directory: true, multiple: false, createDirectories: true })
+        if (!destination || Array.isArray(destination)) return
+        const path = await invoke<string>("import_project_archive", { archivePath: archive, destination })
+        const imported = await openProject(path)
+        await addToRecentProjects(imported)
+        setProjectToolStatus(t("settings.sections.maintenance.projectData.imported", { name: imported.name }))
+        return
+      }
+      const picked = await pickFiles({ accept: ".zip", multiple: false })
+      if (!picked || picked.length === 0) return
+      const file = picked[0]
+      const buffer = await file.file.arrayBuffer()
+      const form = new FormData()
+      form.append("archive", new Blob([buffer]), file.name)
+      const result = await webRequest<{ ok: boolean; name: string }>(
+        "/api/v1/projects/import-archive",
+        { method: "POST", formData: form },
+      )
+      if (result.ok) {
+        const projects = await webRequest<{ projects: Array<{ id: string; name: string; path: string }> }>(
+          WEB_ENDPOINTS.projects(),
+        )
+        const next = projects.projects.find((p) => p.name === result.name)
+        if (next) {
+          const imported = { id: next.id, name: next.name, path: next.path }
+          await openProject(next.path)
+          await addToRecentProjects(imported)
+        }
+        setProjectToolStatus(t("settings.sections.maintenance.projectData.imported", { name: result.name }))
+      }
     } catch (error) { setProjectToolStatus(String(error)) } finally { setProjectToolBusy(false) }
   }, [t])
 

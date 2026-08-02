@@ -1,0 +1,30 @@
+node_modules
+dist
+.git
+.github
+.idea
+.vscode
+target
+src-tauri/target
+src-tauri/.cargo
+src-tauri/gen
+*.log
+.DS_Store
+*.tmp
+extension
+plans
+scripts
+mcp-server
+README_CN.md
+README_JA.md
+README_KO.md
+assets
+logo.jpg
+*.md
+!Dockerfile
+!compose.yaml
+!.dockerignore
+# Cargo.lock is intentionally shipped so the Docker build is
+# reproducible across image rebuilds (was previously ignored which
+# caused Cargo to silently re-resolve the dependency graph each time).
+!src-tauri/Cargo.lock

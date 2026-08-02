@@ -11,7 +11,7 @@ import {
   Users, Lightbulb, BookOpen, HelpCircle, GitMerge, BarChart3, Layout, Globe,
   TrendingUp, Target, Sparkles, Image as ImageIcon, FileSearch, Terminal,
 } from "lucide-react"
-import { openUrl } from "@tauri-apps/plugin-opener"
+import { openExternalUrl } from "@/lib/opener"
 import { useWikiStore } from "@/stores/wiki-store"
 import { readFile, writeFile, listDirectory } from "@/commands/fs"
 import { lastQueryPages } from "@/components/chat/chat-panel"
@@ -974,7 +974,7 @@ function CitedReferencesPanel({
         return
       }
       if (target) {
-        await openUrl(target).catch((err) => {
+        await openExternalUrl(target).catch((err) => {
           console.warn("[chat refs] failed to open external reference:", err)
         })
       }

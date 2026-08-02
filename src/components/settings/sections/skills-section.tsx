@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { invoke } from "@tauri-apps/api/core"
+import { IS_TAURI } from "@/lib/platform"
 import { RefreshCw, Search, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useChatStore } from "@/stores/chat-store"
@@ -69,9 +69,20 @@ export function SkillsSection() {
       setSkills([])
       return
     }
+    if (!IS_TAURI) {
+      // Skill discovery shells out via the Tauri-side command; on web
+      // there is no project file tree to scan, so report an empty list
+      // and let the explanation text below carry the context.
+      setSkills([])
+      setStatus(t("settings.sections.skills.desktopOnly", {
+        defaultValue: "Skill scanning is available only in the desktop app.",
+      }))
+      return
+    }
     setLoading(true)
     setStatus(null)
     try {
+      const { invoke } = await import("@tauri-apps/api/core")
       const found = await invoke<AvailableAgentSkill[]>("agent_list_skills", {
         projectPath: project.path,
       })

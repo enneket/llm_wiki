@@ -1,18 +1,39 @@
 import { useState, useEffect } from "react"
-import { open } from "@tauri-apps/plugin-dialog"
-import { invoke } from "@tauri-apps/api/core"
-import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart"
 import i18n from "@/i18n"
+import { IS_TAURI } from "@/lib/platform"
+import { pickDirectory } from "@/lib/dialog"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
 import { useLintStore } from "@/stores/lint-store"
 import { useChatStore } from "@/stores/chat-store"
 import { BASE_FONT_SIZE_PX, useZoomStore } from "@/stores/zoom-store"
 import { openProject } from "@/commands/fs"
-import { getLastProject, getRecentProjects, saveLastProject, loadLlmConfig, loadLanguage, loadSearchApiConfig, loadEmbeddingConfig, loadMineruConfig, loadMultimodalConfig, loadOutputLanguage, loadProviderConfigs, loadCustomLlmPresets, loadActivePresetId, loadTaskModelRouting, loadProjectLlmOverride, loadProxyConfig, loadScheduledImportConfig, saveScheduledImportConfig, loadSourceWatchConfig, loadApiConfig, loadGeneralConfig, loadZoomLevel } from "@/lib/project-store"
+import {
+  getLastProject,
+  getRecentProjects,
+  saveLastProject,
+  loadLlmConfig,
+  loadLanguage,
+  loadSearchApiConfig,
+  loadEmbeddingConfig,
+  loadMineruConfig,
+  loadMultimodalConfig,
+  loadOutputLanguage,
+  loadProviderConfigs,
+  loadCustomLlmPresets,
+  loadActivePresetId,
+  loadTaskModelRouting,
+  loadProjectLlmOverride,
+  loadProxyConfig,
+  loadScheduledImportConfig,
+  saveScheduledImportConfig,
+  loadSourceWatchConfig,
+  loadApiConfig,
+  loadGeneralConfig,
+  loadZoomLevel,
+} from "@/lib/project-store"
 import { loadReviewItems, loadLintItems, loadChatHistory, loadChatPreferences } from "@/lib/persist"
 import { setupAutoSave } from "@/lib/auto-save"
-import { startClipWatcher } from "@/lib/clip-watcher"
 import { AppLayout } from "@/components/layout/app-layout"
 import { WelcomeScreen } from "@/components/project/welcome-screen"
 import { CreateProjectDialog } from "@/components/project/create-project-dialog"
@@ -122,7 +143,11 @@ function App() {
   // Set up auto-save and clip watcher once on mount
   useEffect(() => {
     setupAutoSave()
-    startClipWatcher()
+    if (IS_TAURI) {
+      import("@/lib/clip-watcher").then(({ startClipWatcher }) => {
+        startClipWatcher()
+      }).catch(() => undefined)
+    }
   }, [])
 
   useEffect(() => {
@@ -366,20 +391,26 @@ function App() {
         }
         const savedGeneral = await loadGeneralConfig()
         useWikiStore.getState().setGeneralConfig(savedGeneral)
-        try {
-          await invoke<string>("set_close_behavior", { value: savedGeneral.closeBehavior })
-        } catch (err) {
-          console.warn("[general] failed to hydrate close behavior:", err)
-        }
-        try {
-          const currentAutostart = await isAutostartEnabled()
-          if (savedGeneral.autostart && !currentAutostart) {
-            await enableAutostart()
-          } else if (!savedGeneral.autostart && currentAutostart) {
-            await disableAutostart()
+        if (IS_TAURI) {
+          const tauri = await import("@tauri-apps/api/core")
+          try {
+            await tauri.invoke<string>("set_close_behavior", {
+              value: savedGeneral.closeBehavior,
+            })
+          } catch (err) {
+            console.warn("[general] failed to hydrate close behavior:", err)
           }
-        } catch (err) {
-          console.warn("[general] failed to sync autostart:", err)
+          try {
+            const autostart = await import("@tauri-apps/plugin-autostart")
+            const currentAutostart = await autostart.isEnabled()
+            if (savedGeneral.autostart && !currentAutostart) {
+              await autostart.enable()
+            } else if (!savedGeneral.autostart && currentAutostart) {
+              await autostart.disable()
+            }
+          } catch (err) {
+            console.warn("[general] failed to sync autostart:", err)
+          }
         }
         const savedLang = await loadLanguage()
         if (savedLang) {
@@ -392,6 +423,23 @@ function App() {
             await handleProjectOpened(proj)
           } catch {
             // Last project no longer valid
+          }
+        } else if (!IS_TAURI) {
+          try {
+            const { adapterProjects } = await import("@/lib/adapter")
+            const projects = await adapterProjects()
+            const current = projects.find((p) => p.current) ?? projects[0]
+            if (current) {
+              const proj: WikiProject = {
+                id: current.id,
+                name: current.name,
+                path: current.path,
+              }
+              await saveLastProject(proj)
+              await handleProjectOpened(proj)
+            }
+          } catch (err) {
+            console.warn("[web] failed to auto-open default project:", err)
           }
         }
       } catch {
@@ -473,22 +521,17 @@ function App() {
           stopProjectFileSync().catch(() => {})
         }
       }).catch((err) => console.error("Failed to configure project file sync:", err))
-      // Notify local clip server of the current project + all recent projects
-      fetch("http://127.0.0.1:19827/project", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: proj.path }),
-      }).catch(() => {})
-
-      // Send all recent projects to clip server for extension project picker
-      getRecentProjects().then((recents) => {
-        const projects = recents.map((p) => ({ name: p.name, path: p.path }))
-        fetch("http://127.0.0.1:19827/projects", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ projects }),
+      if (IS_TAURI) {
+        import("@/lib/clip-watcher").then(({ notifyClipServerOfProject }) => {
+          notifyClipServerOfProject(proj.path).catch(() => {})
+          return getRecentProjects()
+        }).then((recents) => {
+          const projects = recents.map((p) => ({ name: p.name, path: p.path }))
+          return import("@/lib/clip-watcher").then(({ notifyClipServerOfProjects }) =>
+            notifyClipServerOfProjects(projects),
+          )
         }).catch(() => {})
-      }).catch(() => {})
+      }
       // Load lightweight chat preferences before first paint so the chat
       // controls reflect the user's saved tool toggles. The heavier per-
       // conversation history load is deferred below.
@@ -531,11 +574,11 @@ function App() {
   }
 
   async function handleOpenProject() {
-    const selected = await open({
-      directory: true,
-      multiple: false,
-      title: "Open Wiki Project",
-    })
+    if (!IS_TAURI) {
+      window.alert("In browser mode, projects are managed by the server. Use Create Project.")
+      return
+    }
+    const selected = await pickDirectory({ title: "Open Wiki Project" })
     if (!selected) return
     try {
       const proj = await openProject(selected)

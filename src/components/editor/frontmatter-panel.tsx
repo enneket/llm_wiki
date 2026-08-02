@@ -14,7 +14,7 @@ import {
   Calendar,
   Tag as TagIcon,
 } from "lucide-react"
-import { openUrl } from "@tauri-apps/plugin-opener"
+import { openExternalUrl } from "@/lib/opener"
 import type { FrontmatterValue } from "@/lib/frontmatter"
 import { getWikiTypeStyle } from "@/lib/wiki-type-style"
 import {
@@ -87,7 +87,7 @@ export function FrontmatterPanel({ data }: FrontmatterPanelProps) {
   }
 
   function handleOpenExternal(url: string) {
-    void openUrl(url).catch((err) => {
+    void openExternalUrl(url).catch((err) => {
       console.warn("[frontmatter] openUrl failed:", err)
     })
   }

@@ -25,8 +25,11 @@ src-tauri/gen/
 docs/
 AGENTS.md
 
-# Benchmark and test data (local only)
-tests/
+# Benchmark and test data (local only) — only the top-level Node/TS
+# fixtures folder. Rust integration tests live under src-tauri/tests and
+# MUST be tracked (slashed prefix avoids accidentally swallowing them).
+/tests/
+!src-tauri/tests/
 
 # Editor directories and files
 .vscode/*

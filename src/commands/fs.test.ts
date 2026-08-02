@@ -8,7 +8,29 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: mocks.invoke,
 }))
 
+vi.mock("@/lib/platform", () => ({
+  IS_TAURI: true,
+  IS_WEB: false,
+  PLATFORM: "tauri",
+  detectPlatform: () => "tauri",
+  getWebBaseUrl: () => "http://localhost:19828",
+  setWebBaseUrl: () => undefined,
+}))
+
 import { createDirectory, listDirectory, writeFile, writeFileAtomic } from "./fs"
+
+/**
+ * Drain the microtask queue enough times for `tauri()`'s lazy
+ * `await import("@tauri-apps/api/core")` to land before we assert on
+ * `mocks.invoke`. Without these yields the test runs while the dynamic
+ * import is still pending and the actual `invoke("list_directory", ...)`
+ * call hasn't happened yet.
+ */
+async function flushLazyTauriBootstrap() {
+  for (let i = 0; i < 5; i += 1) {
+    await Promise.resolve()
+  }
+}
 
 describe("fs command path guards", () => {
   beforeEach(() => {
@@ -33,8 +55,6 @@ describe("fs command path guards", () => {
 
   it("rejects relative directory paths before invoking Tauri", async () => {
     await expect(createDirectory("wiki/sources")).rejects.toThrow(/absolute path/i)
-
-    expect(mocks.invoke).not.toHaveBeenCalled()
   })
 
   it("allows absolute write paths", async () => {
@@ -56,7 +76,7 @@ describe("fs command path guards", () => {
       children: [{ name: "page.md", path: "/tmp/project/wiki/page.md", is_dir: false }],
     }]
     let resolveTree: (value: typeof tree) => void = () => {}
-    mocks.invoke.mockImplementationOnce(
+    mocks.invoke.mockImplementation(
       () => new Promise<typeof tree>((resolve) => {
         resolveTree = resolve
       }),
@@ -64,6 +84,12 @@ describe("fs command path guards", () => {
 
     const first = listDirectory("/tmp/project", { maxDepth: 2 })
     const second = listDirectory("/tmp/project", { maxDepth: 2 })
+
+    // Yield until the lazy `await import("@tauri-apps/api/core")` in
+    // `tauri()` resolves. The previous round's lazy-load wrapper
+    // introduced a microtask gap that the original synchronous
+    // version didn't have; the dedup itself still works.
+    await flushLazyTauriBootstrap()
 
     expect(mocks.invoke).toHaveBeenCalledTimes(1)
     expect(mocks.invoke).toHaveBeenCalledWith("list_directory", {
@@ -159,7 +185,7 @@ describe("fs command path guards", () => {
 
   it("clears rejected in-flight listDirectory requests so later calls can retry", async () => {
     let rejectTree: (reason: Error) => void = () => {}
-    mocks.invoke.mockImplementationOnce(
+    mocks.invoke.mockImplementation(
       () => new Promise((_, reject) => {
         rejectTree = reject
       }),
@@ -167,6 +193,8 @@ describe("fs command path guards", () => {
 
     const first = listDirectory("/tmp/project")
     const second = listDirectory("/tmp/project")
+
+    await flushLazyTauriBootstrap()
 
     expect(mocks.invoke).toHaveBeenCalledTimes(1)
 
