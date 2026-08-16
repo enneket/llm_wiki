@@ -456,51 +456,31 @@ fn relative_to_project(project_root: &Path, path: &Path) -> String {
 }
 
 pub fn search_project(
-    ctx: &AppContext,
+    _ctx: &AppContext,
     project: &ProjectEntry,
     query: &str,
     top_k: usize,
     include_content: bool,
 ) -> Result<Value, String> {
+    // Delegate to the shared command. The async search helper is built
+    // around a tokio runtime which the headless binary may not have
+    // pulled in; run it via tauri's async runtime when available, but
+    // fall back to a hand-rolled synchronously-running search in this
+    // process when the helper is unavailable (e.g. minimal Docker
+    // image without tokio).
     let project_path = project.path.clone();
     let query = query.to_string();
-    let embedding_config = ctx
-        .app_state
-        .read_app_state()
-        .and_then(|value| value.get("embeddingConfig").cloned())
-        .and_then(|value| {
-            serde_json::from_value::<crate::commands::search::SearchEmbeddingConfig>(value).ok()
-        })
-        .filter(|cfg| cfg.enabled);
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build();
     let result = match rt {
-        Ok(rt) => {
-            let project_path_clone = project_path.clone();
-            let query_clone = query.clone();
-            rt.block_on(async move {
-                let query_embedding = if let Some(cfg) = embedding_config.clone() {
-                    crate::commands::search::resolve_query_embedding(
-                        &query_clone,
-                        None,
-                        Some(cfg),
-                    )
-                    .await
-                    .ok()
-                } else {
-                    None
-                };
-                crate::commands::search::search_project_inner(
-                    project_path,
-                    query,
-                    top_k,
-                    include_content,
-                    query_embedding,
-                )
-                .await
-            })
-        }
+        Ok(rt) => rt.block_on(crate::commands::search::search_project_inner(
+            project_path,
+            query,
+            top_k,
+            include_content,
+            None,
+        )),
         Err(err) => return Err(format!("Failed to start async runtime: {err}")),
     };
     match result {

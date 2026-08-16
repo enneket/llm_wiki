@@ -1,0 +1,39 @@
+[package]
+name = "llm-wiki-web-server"
+version = "0.6.6"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "llm-wiki-web"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "multipart"] }
+tiny_http = "0.12"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+walkdir = "2"
+notify = "8"
+chrono = { version = "0.4", features = ["clock"] }
+uuid = { version = "1", features = ["v4"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+base64 = "0.22"
+sha2 = "0.10"
+md-5 = "0.10"
+epub = "2.1.5"
+mobi = "0.8"
+html2text = { version = "0.17.1", default-features = false, features = ["xml"] }
+which = "7"
+calamine = "0.34.0"
+docx-rs = "0.4.20"
+office_oxide = "=0.1.2"
+lancedb = "0.27.2"
+arrow-array = "57"
+arrow-schema = "57"
+futures = "0.3"
+tokio = { version = "1", features = ["process", "io-util", "sync", "macros", "rt", "rt-multi-thread", "time"] }
+signal-hook = "0.3"

@@ -1,16 +1,13 @@
 mod agent;
 mod api_server;
 mod clip_server;
-mod commands;
-mod cors;
+pub mod commands;
+pub mod cors;
 mod panic_guard;
 mod proxy;
 mod server_bind;
 mod tray;
 mod types;
-
-#[cfg(feature = "web")]
-pub mod web;
 
 use panic_guard::run_guarded;
 use serde::{Deserialize, Serialize};

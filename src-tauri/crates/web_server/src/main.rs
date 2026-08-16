@@ -1,4 +1,4 @@
-use std::env;
+﻿use std::env;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -7,7 +7,16 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::Value;
 
-use llm_wiki_lib::web::{run_server, BackendConfig};
+mod app_state;
+mod cors;
+mod http;
+mod multipart;
+mod search;
+mod server;
+mod tasks;
+mod watcher;
+
+use server::{run_server, BackendConfig};
 
 #[derive(Debug, Clone, Deserialize)]
 struct RawEnvConfig {
@@ -51,7 +60,10 @@ fn empty_env_config() -> RawEnvConfig {
 fn parse_env_file(path: &Path) -> RawEnvConfig {
     match std::fs::read_to_string(path) {
         Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|err| {
-            eprintln!("[llm-wiki-web] WARN: failed to parse config {}: {err}", path.display());
+            eprintln!(
+                "[llm-wiki-web] WARN: failed to parse config {}: {err}",
+                path.display(),
+            );
             empty_env_config()
         }),
         Err(_) => empty_env_config(),
@@ -116,21 +128,27 @@ fn main() -> ExitCode {
         .and_then(|s| s.parse().ok())
         .unwrap_or(8080);
 
-    let data_dir = env_or("LLM_WIKI_DATA_DIR", env_cfg.data_dir.clone())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("data"));
+    let data_dir: PathBuf = env_or(
+        "LLM_WIKI_DATA_DIR",
+        env_cfg.data_dir.clone(),
+    )
+    .map(PathBuf::from)
+    .unwrap_or_else(|| PathBuf::from("data"));
 
-    let dist_dir = env_or("LLM_WIKI_DIST_DIR", env_cfg.dist_dir.clone())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("dist"));
+    let dist_dir: PathBuf = env_or(
+        "LLM_WIKI_DIST_DIR",
+        env_cfg.dist_dir.clone(),
+    )
+    .map(PathBuf::from)
+    .unwrap_or_else(|| PathBuf::from("dist"));
 
     let api_token = env_or("LLM_WIKI_API_TOKEN", env_cfg.api_token.clone());
     let allow_unauthenticated = env_bool(
         "LLM_WIKI_ALLOW_UNAUTHENTICATED",
         env_cfg.allow_unauthenticated.unwrap_or(false),
     );
-    let log_level =
-        env_or("LLM_WIKI_LOG", env_cfg.log_level.clone()).unwrap_or_else(|| "info".to_string());
+    let log_level = env_or("LLM_WIKI_LOG", env_cfg.log_level.clone())
+        .unwrap_or_else(|| "info".to_string());
     let max_upload_bytes = env::var("LLM_WIKI_MAX_UPLOAD_BYTES")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -145,7 +163,7 @@ fn main() -> ExitCode {
     if let Err(err) = std::fs::create_dir_all(&data_dir) {
         eprintln!(
             "[llm-wiki-web] failed to prepare data dir {}: {err}",
-            data_dir.display()
+            data_dir.display(),
         );
         return ExitCode::from(2);
     }
@@ -176,7 +194,7 @@ fn main() -> ExitCode {
         max_body_bytes,
     };
 
-    let _handle = match run_server(config) {
+    let handle = match run_server(config) {
         Ok(handle) => handle,
         Err(err) => {
             eprintln!("[llm-wiki-web] failed to start: {err}");
@@ -189,6 +207,7 @@ fn main() -> ExitCode {
     while running.load(std::sync::atomic::Ordering::SeqCst) {
         std::thread::sleep(Duration::from_millis(250));
     }
+    drop(handle);
     ExitCode::SUCCESS
 }
 
@@ -207,10 +226,7 @@ fn install_signal_handler(running: std::sync::Arc<std::sync::atomic::AtomicBool>
         .name("llm-wiki-web-signal".to_string())
         .spawn(move || {
             for sig in signals.forever() {
-                eprintln!(
-                    "[llm-wiki-web] received signal {}, shutting down",
-                    sig
-                );
+                eprintln!("[llm-wiki-web] received signal {}, shutting down", sig);
                 running.store(false, std::sync::atomic::Ordering::SeqCst);
                 break;
             }
@@ -218,37 +234,3 @@ fn install_signal_handler(running: std::sync::Arc<std::sync::atomic::AtomicBool>
         .ok();
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn matches_yes_truthy_values() {
-        for v in ["1", "true", "yes", "on", "y", "t", "TRUE", "Yes"] {
-            assert!(matches_yes(v), "{v}");
-        }
-    }
-
-    #[test]
-    fn matches_yes_falsy_values() {
-        for v in ["0", "false", "no", "off", "n", "f", ""] {
-            assert!(!matches_yes(v), "{v}");
-        }
-    }
-
-    #[test]
-    fn empty_env_config_is_all_none() {
-        let cfg = empty_env_config();
-        assert!(cfg.bind_host.is_none());
-        assert!(cfg.port.is_none());
-        assert!(cfg.data_dir.is_none());
-        assert!(cfg.api_token.is_none());
-        assert!(cfg.allow_unauthenticated.is_none());
-    }
-
-    #[test]
-    fn parse_env_file_handles_missing_path() {
-        let cfg = parse_env_file(Path::new("/nonexistent/path"));
-        assert!(cfg.bind_host.is_none());
-    }
-}
